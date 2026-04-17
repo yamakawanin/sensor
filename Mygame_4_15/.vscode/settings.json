@@ -1,0 +1,6 @@
+{
+  "files.associations": {
+    "*.ino": "arduino"
+  },
+  "C_Cpp.errorSquiggles": "disabled"
+}
