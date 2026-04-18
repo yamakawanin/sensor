@@ -47,25 +47,13 @@ void delay(unsigned long ms);
 #define HAS_WIRE 0
 #endif
 
-#if __has_include(<LiquidCrystal_I2C.h>)
 #include <LiquidCrystal_I2C.h>
-#else
-class LiquidCrystal_I2C {
- public:
-  LiquidCrystal_I2C(unsigned char addr, int cols, int rows) {}
-  void init() {}
-  void backlight() {}
-  void clear() {}
-  void setCursor(int col, int row) {}
-  void print(const char *s) {}
-  void print(int v) {}
-};
-#endif
 
 const int lcdAddrA = 0x27;
 const int lcdAddrB = 0x3F;
 LiquidCrystal_I2C lcdA(lcdAddrA, 16, 2);
 LiquidCrystal_I2C lcdB(lcdAddrB, 16, 2);
+LiquidCrystal_I2C lcdDyn(0x20, 16, 2);
 LiquidCrystal_I2C *lcd = &lcdA;
 bool lcdReady = false;
 
@@ -80,13 +68,41 @@ bool i2cAddressExists(unsigned char addr) {
 }
 
 unsigned char detectLcdAddress() {
+  // 先优先尝试常见地址。
   if (i2cAddressExists((unsigned char)lcdAddrA)) {
     return (unsigned char)lcdAddrA;
   }
   if (i2cAddressExists((unsigned char)lcdAddrB)) {
     return (unsigned char)lcdAddrB;
   }
+
+  // 兜底全范围扫描，兼容非常见 PCF8574 地址。
+  for (unsigned char addr = 0x03; addr <= 0x77; addr++) {
+    if (i2cAddressExists(addr)) {
+      return addr;
+    }
+  }
   return 0;
+}
+
+void printI2cScanResult() {
+#if HAS_WIRE
+  bool found = false;
+  Serial.println("[I2C] Scan start");
+  for (unsigned char addr = 0x03; addr <= 0x77; addr++) {
+    if (i2cAddressExists(addr)) {
+      found = true;
+      char addrHex[7];
+      snprintf(addrHex, sizeof(addrHex), "0x%02X", (unsigned int)addr);
+      Serial.print("[I2C] Found device at 0x");
+      Serial.println(addrHex);
+    }
+  }
+  if (!found) {
+    Serial.println("[I2C] No device found");
+  }
+  Serial.println("[I2C] Scan end");
+#endif
 }
 
 void setupLcd() {
@@ -94,9 +110,16 @@ void setupLcd() {
   Wire.begin();
 #endif
 
+  printI2cScanResult();
+
   unsigned char addr = detectLcdAddress();
   if (addr == (unsigned char)lcdAddrB) {
     lcd = &lcdB;
+  } else if (addr == (unsigned char)lcdAddrA) {
+    lcd = &lcdA;
+  } else if (addr != 0) {
+    lcdDyn = LiquidCrystal_I2C(addr, 16, 2);
+    lcd = &lcdDyn;
   } else {
     lcd = &lcdA;
   }
@@ -108,14 +131,18 @@ void setupLcd() {
 
   if (addr == 0) {
     lcd->print("LCD? 0x27/0x3F");
-    Serial.println("[LCD] No I2C device at 0x27 or 0x3F");
+    Serial.println("[LCD] No usable I2C LCD found");
     lcdReady = false;
     return;
   }
 
   lcd->print("Dino Sensor");
+  lcd->setCursor(0, 1);
+  lcd->print("LCD OK");
+  char addrHex[7];
+  snprintf(addrHex, sizeof(addrHex), "0x%02X", (unsigned int)addr);
   Serial.print("[LCD] Connected at 0x");
-  Serial.println(addr, HEX);
+  Serial.println(addrHex);
   lcdReady = true;
 }
 
@@ -186,8 +213,9 @@ const int trigPin = 9;
 const int echoPin = 10;
 const int lightPin = A0;
 
-const int JUMP_OBSTACLE_NEAR_CM = 5;
-const int JUMP_OBSTACLE_FAR_CM = 10;
+// 5cm 在实操里过近，改为更容易触发的默认值。
+const int JUMP_OBSTACLE_NEAR_CM = 12;
+const int JUMP_OBSTACLE_FAR_CM = 20;
 const unsigned long JUMP_DEBOUNCE_MS = 280;
 const int JUMP_CONFIRM_SAMPLES = 2;
 
