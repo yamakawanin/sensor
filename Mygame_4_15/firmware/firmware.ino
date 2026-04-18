@@ -42,6 +42,9 @@ void delay(unsigned long ms);
 
 #if __has_include(<Wire.h>)
 #include <Wire.h>
+#define HAS_WIRE 1
+#else
+#define HAS_WIRE 0
 #endif
 
 #if __has_include(<LiquidCrystal_I2C.h>)
@@ -59,15 +62,72 @@ class LiquidCrystal_I2C {
 };
 #endif
 
-// LCD1602A I2C（4针）常见地址为 0x27（若无显示可尝试 0x3F）
-const int lcdAddr = 0x27;
-LiquidCrystal_I2C lcd(lcdAddr, 16, 2);
+const int lcdAddrA = 0x27;
+const int lcdAddrB = 0x3F;
+LiquidCrystal_I2C lcdA(lcdAddrA, 16, 2);
+LiquidCrystal_I2C lcdB(lcdAddrB, 16, 2);
+LiquidCrystal_I2C *lcd = &lcdA;
+bool lcdReady = false;
+
+bool i2cAddressExists(unsigned char addr) {
+#if HAS_WIRE
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;
+#else
+  (void)addr;
+  return false;
+#endif
+}
+
+unsigned char detectLcdAddress() {
+  if (i2cAddressExists((unsigned char)lcdAddrA)) {
+    return (unsigned char)lcdAddrA;
+  }
+  if (i2cAddressExists((unsigned char)lcdAddrB)) {
+    return (unsigned char)lcdAddrB;
+  }
+  return 0;
+}
+
+void setupLcd() {
+#if HAS_WIRE
+  Wire.begin();
+#endif
+
+  unsigned char addr = detectLcdAddress();
+  if (addr == (unsigned char)lcdAddrB) {
+    lcd = &lcdB;
+  } else {
+    lcd = &lcdA;
+  }
+
+  lcd->init();
+  lcd->backlight();
+  lcd->clear();
+  lcd->setCursor(0, 0);
+
+  if (addr == 0) {
+    lcd->print("LCD? 0x27/0x3F");
+    Serial.println("[LCD] No I2C device at 0x27 or 0x3F");
+    lcdReady = false;
+    return;
+  }
+
+  lcd->print("Dino Sensor");
+  Serial.print("[LCD] Connected at 0x");
+  Serial.println(addr, HEX);
+  lcdReady = true;
+}
 
 char scoreCmdBuf[16];
 int scoreCmdLen = 0;
 int currentScore = 0;
 
 void renderScore(int score) {
+  if (!lcdReady) {
+    return;
+  }
+
   if (score < 0) {
     score = 0;
   }
@@ -77,8 +137,8 @@ void renderScore(int score) {
 
   char line[17];
   snprintf(line, sizeof(line), "Score:%-10d", score);
-  lcd.setCursor(0, 1);
-  lcd.print(line);
+  lcd->setCursor(0, 1);
+  lcd->print(line);
 }
 
 void applyScoreCommand() {
@@ -141,11 +201,7 @@ void setup() {
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
 
-  lcd.init();
-  lcd.backlight();
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Dino Sensor");
+  setupLcd();
   renderScore(0);
 }
 
