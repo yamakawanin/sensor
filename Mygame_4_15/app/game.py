@@ -30,8 +30,9 @@ MAX_OBSTACLE_LENGTH = 2
 MAX_SPEED = 9.5
 SPEED = 4.6
 
-DARK_ON_THRESHOLD = 320
-DARK_OFF_THRESHOLD = 380
+DARK_ON_THRESHOLD = 260
+DARK_OFF_THRESHOLD = 460
+LIGHT_CONFIRM_SAMPLES = 8
 
 
 TREX_B64 = "iVBORw0KGgoAAAANSUhEUgAAAQgAAAAvAgMAAABiRrxWAAAADFBMVEX///9TU1P39/f///+TS9URAAAAAXRSTlMAQObYZgAAAPpJREFUeF7d0jFKRkEMhdGLMM307itNLALyVmHvJuzTDMjdn72E95PGFEZSmeoU4YMMgxhskvQec8YSVFX1NhGcS5ywtbmC8khcZeKq+ZWJ4F8Sr2+ZCErjkJFEfcjAc/6/BMlfcz6xHdhRthYzIZhIHMcTVY1scUUiAphK8CMSPUbieTBhvD9Lj0vyV4wklEGzHpciKGOJoBp7XDcFs4kWxxM7Ey3iZ8JbzASAvMS7XLOJHTTvEkEZSeQl7DMuwVyCasqK5+XzQRYLUJlMbPXjFcn3m8eKBSjWZMJwvGIOvViAzCbUj1VEDoqFOEQGE3SyInJQLOQMJL4B7enP1UbLXJQAAAAASUVORK5CYII="
@@ -73,6 +74,8 @@ class ArduinoInput:
         self.last_distance = None
         self.last_light = None
         self.last_jump_signal = 0
+        self.last_sent_score = -1
+        self.last_score_send_time = 0.0
 
     @property
     def connected(self) -> bool:
@@ -151,11 +154,25 @@ class ArduinoInput:
         if jump_signal == 1 and now >= self.jump_cooldown_until:
             state.jump_pressed = True
             self.jump_cooldown_until = now + 0.34
-        elif 3 <= distance <= 200 and distance < 22 and now >= self.jump_cooldown_until:
-            state.jump_pressed = True
-            self.jump_cooldown_until = now + 0.34
 
         return state
+
+    def send_score(self, score: int, force: bool = False):
+        if not self.connected:
+            return
+
+        now = time.time()
+        if not force:
+            # 只在分数变化或超时时发送，减少串口拥塞。
+            if score == self.last_sent_score and now - self.last_score_send_time < 0.35:
+                return
+
+        try:
+            self.ser.write(f"S{score}\n".encode("utf-8"))
+            self.last_sent_score = score
+            self.last_score_send_time = now
+        except Exception:
+            self.close()
 
 
 class SpriteBank:
@@ -488,12 +505,15 @@ class Game:
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
         self.big_font = pygame.font.SysFont("Menlo", 20)
+        self.small_font = pygame.font.SysFont("Menlo", 14)
 
         self.day_bank = SpriteBank((83, 83, 83, 255))
         self.night_bank = SpriteBank((245, 245, 245, 255))
 
         self.arduino = ArduinoInput()
         self.has_arduino = self.arduino.connect()
+        self.arduino_status_text = ""
+        self.update_arduino_status(initial=True)
 
         self.trex = Trex()
         self.horizon = HorizonLine()
@@ -509,13 +529,37 @@ class Game:
         self.speed = SPEED
 
         self.night_mode = False
+        self.dark_streak = 0
+        self.bright_streak = 0
+
+    def update_arduino_status(self, initial: bool = False):
+        connected = self.arduino.connected
+        self.has_arduino = connected
+
+        if connected:
+            self.arduino_status_text = f"Arduino: Connected ({self.arduino.port})"
+            if initial:
+                print(f"[Arduino] Connected on {self.arduino.port}")
+        else:
+            self.arduino_status_text = "Arduino: Not connected"
+            if initial:
+                print("[Arduino] Not connected, keyboard mode is available.")
 
     def update_night_mode(self, sensor: InputState, key_toggle: bool):
         if self.has_arduino and sensor.light_value is not None:
             if sensor.light_value <= DARK_ON_THRESHOLD:
-                self.night_mode = True
+                self.dark_streak += 1
+                self.bright_streak = 0
+                if self.dark_streak >= LIGHT_CONFIRM_SAMPLES:
+                    self.night_mode = True
             elif sensor.light_value >= DARK_OFF_THRESHOLD:
-                self.night_mode = False
+                self.bright_streak += 1
+                self.dark_streak = 0
+                if self.bright_streak >= LIGHT_CONFIRM_SAMPLES:
+                    self.night_mode = False
+            else:
+                self.dark_streak = 0
+                self.bright_streak = 0
         elif key_toggle:
             self.night_mode = not self.night_mode
 
@@ -532,6 +576,9 @@ class Game:
     def handle_events(self):
         jump_pressed = False
         toggle_c = False
+
+        if self.has_arduino and not self.arduino.connected:
+            self.update_arduino_status()
 
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -645,6 +692,12 @@ class Game:
         paint_score = self.distance_meter.update(dt_ms, self.distance_ran)
         self.distance_meter.draw(self.screen, bank, paint=paint_score)
 
+        status_color = (90, 170, 90) if self.has_arduino else (180, 90, 90)
+        if self.night_mode:
+            status_color = (160, 220, 160) if self.has_arduino else (230, 150, 150)
+        status = self.small_font.render(self.arduino_status_text, True, status_color)
+        self.screen.blit(status, (8, HEIGHT - 22))
+
         if self.crashed:
             fg = (245, 245, 245) if self.night_mode else (83, 83, 83)
             over = self.big_font.render("GAME OVER", True, fg)
@@ -652,12 +705,19 @@ class Game:
 
         pygame.display.flip()
 
+    def sync_score_to_arduino(self):
+        if not self.has_arduino:
+            return
+        score = self.distance_meter.actual(self.distance_ran)
+        self.arduino.send_score(score)
+
     def run(self):
         running = True
         while running:
             dt_ms = self.clock.tick(FPS)
             running, jump_pressed = self.handle_events()
             self.update(dt_ms, jump_pressed)
+            self.sync_score_to_arduino()
             self.draw(dt_ms)
 
         self.arduino.close()

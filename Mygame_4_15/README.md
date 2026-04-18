@@ -19,8 +19,9 @@ firmware/
   - `Space` / `Up`：跳跃
   - `C`：手动切换昼夜（未连接 Arduino 时）
 - Arduino 控制
-  - 距离靠近触发跳跃
+  - 检测近处障碍物触发跳跃
   - 环境变暗自动切夜间模式
+  - 1602A LCD 实时显示当前得分
 
 ## 2. 运行环境
 
@@ -55,14 +56,13 @@ python app/game.py
 
 ## 4. Arduino 控制小恐龙跳跃方式
 
-本项目采用“距离触发 + 防抖脉冲”的方式控制跳跃：
+本项目采用“障碍物近阈值触发 + 释放阈值复位 + 防抖脉冲”的方式控制跳跃：
 
 1. 超声波每 20ms 测一次距离
 2. 距离做低通滤波，减少抖动
-3. 使用双阈值判断手势状态
-   - `JUMP_NEAR_CM`：进入近距离区，触发一次跳跃脉冲
-   - `JUMP_FAR_CM`：回到远距离区，允许下一次触发
-4. 使用 `JUMP_DEBOUNCE_MS` 防止连跳
+3. 当距离连续几帧小于 `JUMP_OBSTACLE_NEAR_CM` 时，触发一次跳跃
+4. 当距离回到 `JUMP_OBSTACLE_FAR_CM` 以上时，允许下一次触发
+5. 使用 `JUMP_DEBOUNCE_MS` 防止连跳
 
 Arduino 串口输出格式：
 
@@ -73,6 +73,14 @@ distance_cm,light_value,jump
 - `distance_cm`：平滑后的距离
 - `light_value`：光敏电阻模拟值
 - `jump`：0 或 1，`1` 表示本帧触发跳跃
+
+Python -> Arduino 分数下发格式：
+
+```text
+S<score>
+```
+
+例如：`S123` 表示当前分数为 123，Arduino 会更新 LCD 第二行显示。
 
 Python 端兼容两种协议：
 - 新协议：3 列（推荐）
@@ -87,8 +95,21 @@ Python 端兼容两种协议：
   - `GND` -> `GND`
   - `TRIG` -> `D9`
   - `ECHO` -> `D10`
-- 光敏电阻分压
-  - 分压输出 -> `A0`
+- 光敏模块（4 针）
+  - `VCC` -> `5V`
+  - `GND` -> `GND`
+  - `AO` -> `A0`（本项目使用）
+  - `DO` -> 可不接（若要数字阈值触发可接任意数字口）
+
+> 若你使用的是“裸光敏电阻”（2 脚）而不是模块，需要先做分压电路，再把分压输出接到 `A0`。
+
+- LCD1602A（I2C 4 针模块）
+  - `GND` -> `GND`
+  - `VCC` -> `5V`
+  - `SDA` -> `A4`（UNO）
+  - `SCL` -> `A5`（UNO）
+
+> LCD I2C 常见地址为 `0x27`，若无显示可改成 `0x3F` 试试。
 
 > 注意：如果你使用的是 3.3V 板子，请确认 ECHO 电平兼容，必要时加分压或电平转换。
 
@@ -103,12 +124,13 @@ Python 端兼容两种协议：
 ### 6.2 超声波传感器（HC-SR04）
 
 - 负责体感跳跃输入
-- 测量手与传感器距离，距离进入近阈值时触发一次跳跃脉冲
+- 检测前方障碍物距离，进入近阈值时触发一次跳跃脉冲
 
-### 6.3 光敏电阻（含分压电路）
+### 6.3 光敏模块 / 光敏电阻（含分压电路）
 
 - 负责环境亮度输入
-- 将亮度转换为模拟量给 Arduino，Python 端据此切换昼夜模式
+- 本项目使用 `AO` 模拟输出给 Arduino（`A0`），Python 端据此切换昼夜模式
+- `DO` 是比较器数字输出，不参与当前项目逻辑
 
 ### 6.4 USB 数据线（串口链路）
 
@@ -133,17 +155,24 @@ Python 端兼容两种协议：
 - 传输层：USB 串口（传输控制信号）
 - 决策与显示层：Python 游戏（判定并渲染结果）
 
+### 6.8 1602A 显示板的作用
+
+- 显示层补充：在电脑游戏窗口之外，实时显示当前得分
+- 数据链路：Python 每隔短周期通过串口下发 `S<score>`，Arduino 解析后刷新 LCD
+
 ## 7. 可调参数
 
 ### 7.1 Arduino 侧（`firmware/firmware.ino`）
 
-- `JUMP_NEAR_CM`：靠近触发阈值，建议 15~25
-- `JUMP_FAR_CM`：释放阈值，建议比 `JUMP_NEAR_CM` 大 6~12
+- `JUMP_OBSTACLE_NEAR_CM`：障碍物近距离触发阈值，当前默认 5
+- `JUMP_OBSTACLE_FAR_CM`：释放阈值，当前默认 10
+- `JUMP_CONFIRM_SAMPLES`：连续命中帧数，默认 2
 - `JUMP_DEBOUNCE_MS`：跳跃防抖时间，建议 220~350ms
 
 ### 7.2 Python 侧（`app/game.py`）
 
 - `DARK_ON_THRESHOLD` / `DARK_OFF_THRESHOLD`：夜间模式开关阈值
+- `LIGHT_CONFIRM_SAMPLES`：光敏连续确认帧数（增大可降低敏感度）
 - `SPEED` / `ACCELERATION` / `MAX_SPEED`：游戏速度曲线
 
 ## 8. 常见问题
@@ -156,9 +185,10 @@ Python 端兼容两种协议：
 
 ### 8.2 体感跳跃太敏感或不灵敏
 
-- 先调 `JUMP_NEAR_CM` 和 `JUMP_FAR_CM`
+- 先调 `JUMP_OBSTACLE_NEAR_CM` 和 `JUMP_OBSTACLE_FAR_CM`
+- 再调 `JUMP_CONFIRM_SAMPLES`
 - 再调 `JUMP_DEBOUNCE_MS`
-- 最后观察传感器摆放角度与手势距离
+- 最后观察传感器朝向、障碍物材质与距离
 
 ### 8.3 运行报缺少模块
 

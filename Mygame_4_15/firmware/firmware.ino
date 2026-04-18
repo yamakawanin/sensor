@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #else
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 // Minimal declarations for editor IntelliSense when Arduino headers are unavailable.
 #define HIGH 0x1
@@ -13,6 +15,8 @@
 class HardwareSerial {
  public:
   void begin(unsigned long baud);
+  int available(void);
+  int read(void);
   void print(const char *s);
   void print(int v);
   void print(long v);
@@ -36,25 +40,119 @@ unsigned long millis(void);
 void delay(unsigned long ms);
 #endif
 
+#if __has_include(<Wire.h>)
+#include <Wire.h>
+#endif
+
+#if __has_include(<LiquidCrystal_I2C.h>)
+#include <LiquidCrystal_I2C.h>
+#else
+class LiquidCrystal_I2C {
+ public:
+  LiquidCrystal_I2C(unsigned char addr, int cols, int rows) {}
+  void init() {}
+  void backlight() {}
+  void clear() {}
+  void setCursor(int col, int row) {}
+  void print(const char *s) {}
+  void print(int v) {}
+};
+#endif
+
+// LCD1602A I2C（4针）常见地址为 0x27（若无显示可尝试 0x3F）
+const int lcdAddr = 0x27;
+LiquidCrystal_I2C lcd(lcdAddr, 16, 2);
+
+char scoreCmdBuf[16];
+int scoreCmdLen = 0;
+int currentScore = 0;
+
+void renderScore(int score) {
+  if (score < 0) {
+    score = 0;
+  }
+  if (score > 99999) {
+    score = 99999;
+  }
+
+  char line[17];
+  snprintf(line, sizeof(line), "Score:%-10d", score);
+  lcd.setCursor(0, 1);
+  lcd.print(line);
+}
+
+void applyScoreCommand() {
+  if (scoreCmdLen < 2 || scoreCmdBuf[0] != 'S') {
+    return;
+  }
+
+  int score = atoi(scoreCmdBuf + 1);
+  if (score != currentScore) {
+    currentScore = score;
+    renderScore(currentScore);
+  }
+}
+
+void readScoreFromSerial() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+
+    if (c == '\n' || c == '\r') {
+      if (scoreCmdLen > 0) {
+        scoreCmdBuf[scoreCmdLen] = '\0';
+        applyScoreCommand();
+        scoreCmdLen = 0;
+      }
+      continue;
+    }
+
+    if (scoreCmdLen < (int)sizeof(scoreCmdBuf) - 1) {
+      if (scoreCmdLen == 0) {
+        if (c == 'S') {
+          scoreCmdBuf[scoreCmdLen++] = c;
+        }
+      } else if (c >= '0' && c <= '9') {
+        scoreCmdBuf[scoreCmdLen++] = c;
+      } else {
+        scoreCmdLen = 0;
+      }
+    } else {
+      scoreCmdLen = 0;
+    }
+  }
+}
+
 const int trigPin = 9;
 const int echoPin = 10;
 const int lightPin = A0;
 
-const int JUMP_NEAR_CM = 20;
-const int JUMP_FAR_CM = 28;
+const int JUMP_OBSTACLE_NEAR_CM = 5;
+const int JUMP_OBSTACLE_FAR_CM = 10;
 const unsigned long JUMP_DEBOUNCE_MS = 280;
+const int JUMP_CONFIRM_SAMPLES = 2;
 
 float filteredDistance = 200.0;
-bool handNear = false;
+bool obstacleNear = false;
+int nearSampleCount = 0;
 unsigned long lastJumpMs = 0;
 
 void setup() {
   Serial.begin(115200); // 使用更高波特率减少延迟
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Dino Sensor");
+  renderScore(0);
 }
 
 void loop() {
+  // 读取来自 Python 的分数命令：S123\n
+  readScoreFromSerial();
+
   // 超声波测距
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
@@ -71,17 +169,23 @@ void loop() {
   // 读取光敏电阻
   int lightVal = analogRead(lightPin);
 
-  // 用近/远阈值 + 防抖做“抬手触发一次跳跃”
+  // 用“障碍物近/远阈值 + 连续确认 + 防抖”触发跳跃
   int jump = 0;
   unsigned long now = millis();
-  if (!handNear && smoothDistance <= JUMP_NEAR_CM) {
-    handNear = true;
-    if (now - lastJumpMs >= JUMP_DEBOUNCE_MS) {
-      jump = 1;
-      lastJumpMs = now;
+  if (!obstacleNear) {
+    if (smoothDistance <= JUMP_OBSTACLE_NEAR_CM) {
+      nearSampleCount++;
+      if (nearSampleCount >= JUMP_CONFIRM_SAMPLES && now - lastJumpMs >= JUMP_DEBOUNCE_MS) {
+        jump = 1;
+        obstacleNear = true;
+        lastJumpMs = now;
+        nearSampleCount = 0;
+      }
+    } else {
+      nearSampleCount = 0;
     }
-  } else if (handNear && smoothDistance >= JUMP_FAR_CM) {
-    handNear = false;
+  } else if (smoothDistance >= JUMP_OBSTACLE_FAR_CM) {
+    obstacleNear = false;
   }
 
   // 发送数据：距离,光敏值,跳跃脉冲(0/1)
