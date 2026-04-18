@@ -1,3 +1,41 @@
+#if __has_include(<Arduino.h>)
+#include <Arduino.h>
+#else
+#include <stdint.h>
+
+// Minimal declarations for editor IntelliSense when Arduino headers are unavailable.
+#define HIGH 0x1
+#define LOW 0x0
+#define INPUT 0x0
+#define OUTPUT 0x1
+#define A0 14
+
+class HardwareSerial {
+ public:
+  void begin(unsigned long baud);
+  void print(const char *s);
+  void print(int v);
+  void print(long v);
+  void print(unsigned long v);
+  void print(float v);
+  void println(const char *s);
+  void println(int v);
+  void println(long v);
+  void println(unsigned long v);
+  void println(float v);
+};
+
+extern HardwareSerial Serial;
+
+void pinMode(int pin, int mode);
+void digitalWrite(int pin, int value);
+void delayMicroseconds(unsigned int us);
+long pulseIn(int pin, int state, unsigned long timeout = 0UL);
+int analogRead(int pin);
+unsigned long millis(void);
+void delay(unsigned long ms);
+#endif
+
 const int trigPin = 9;
 const int echoPin = 10;
 const int lightPin = A0;
