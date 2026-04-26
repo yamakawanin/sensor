@@ -47,7 +47,27 @@ void delay(unsigned long ms);
 #define HAS_WIRE 0
 #endif
 
+#if __has_include(<LiquidCrystal_I2C.h>)
 #include <LiquidCrystal_I2C.h>
+#else
+// Fallback for IntelliSense when LiquidCrystal_I2C library is not installed.
+class LiquidCrystal_I2C {
+ public:
+  LiquidCrystal_I2C(unsigned char addr, unsigned char cols, unsigned char rows) {
+    (void)addr;
+    (void)cols;
+    (void)rows;
+  }
+  void init() {}
+  void backlight() {}
+  void clear() {}
+  void setCursor(unsigned char col, unsigned char row) {
+    (void)col;
+    (void)row;
+  }
+  void print(const char *s) { (void)s; }
+};
+#endif
 
 const int lcdAddrA = 0x27;
 const int lcdAddrB = 0x3F;
@@ -214,10 +234,10 @@ const int echoPin = 10;
 const int lightPin = A0;
 
 // 5cm 在实操里过近，改为更容易触发的默认值。
-const int JUMP_OBSTACLE_NEAR_CM = 12;
-const int JUMP_OBSTACLE_FAR_CM = 20;
-const unsigned long JUMP_DEBOUNCE_MS = 280;
-const int JUMP_CONFIRM_SAMPLES = 2;
+const int JUMP_OBSTACLE_NEAR_CM = 18;
+const int JUMP_OBSTACLE_FAR_CM = 28;
+const unsigned long JUMP_DEBOUNCE_MS = 180;
+const int JUMP_CONFIRM_SAMPLES = 1;
 
 float filteredDistance = 200.0;
 bool obstacleNear = false;
@@ -247,7 +267,7 @@ void loop() {
   int distance = duration > 0 ? (int)(duration * 0.034 / 2.0) : 300;
 
   // 一阶低通滤波，减少抖动
-  filteredDistance = 0.65 * filteredDistance + 0.35 * distance;
+  filteredDistance = 0.4 * filteredDistance + 0.6 * distance;
   int smoothDistance = (int)filteredDistance;
 
   // 读取光敏电阻
@@ -279,5 +299,5 @@ void loop() {
   Serial.print(",");
   Serial.println(jump);
 
-  delay(20); // 约 50Hz 的采样率，保证游戏流畅度
+  delay(15); // 略提高采样率，让触发响应更快
 }

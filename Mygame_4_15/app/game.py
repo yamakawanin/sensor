@@ -20,15 +20,15 @@ WIDTH = 600
 HEIGHT = 150
 FPS = 60
 
-ACCELERATION = 0.0005
+ACCELERATION = 0.00035
 BG_CLOUD_SPEED = 0.2
 BOTTOM_PAD = 10
-GAP_COEFFICIENT = 0.85
-GRAVITY = 0.6
-INITIAL_JUMP_VELOCITY = -10
+GAP_COEFFICIENT = 1.35
+GRAVITY = 0.5
+INITIAL_JUMP_VELOCITY = -10.8
 MAX_OBSTACLE_LENGTH = 2
-MAX_SPEED = 9.5
-SPEED = 4.6
+MAX_SPEED = 8.2
+SPEED = 4.1
 
 DARK_ON_THRESHOLD = 260
 DARK_OFF_THRESHOLD = 460
@@ -153,7 +153,7 @@ class ArduinoInput:
         now = time.time()
         if jump_signal == 1 and now >= self.jump_cooldown_until:
             state.jump_pressed = True
-            self.jump_cooldown_until = now + 0.34
+            self.jump_cooldown_until = now + 0.22
 
         return state
 
@@ -597,7 +597,7 @@ class Game:
 
     def spawn_obstacle_if_needed(self):
         # 给玩家起跑缓冲区，避免刚开始就立刻遇到障碍
-        if self.distance_ran < 120:
+        if self.distance_ran < 180:
             return
 
         if not self.obstacles:
