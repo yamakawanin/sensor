@@ -1,36 +1,24 @@
-#if __has_include(<Arduino.h>)
+#if defined(ARDUINO)
 #include <Arduino.h>
+#include <WiFi.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 #else
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 class HardwareSerial {
  public:
   void begin(unsigned long baud);
   void print(const char *s);
   void print(int v);
-  void print(float v);
+  void println(void);
   void println(const char *s);
   void println(int v);
-  void println(float v);
 };
 
-extern HardwareSerial Serial;
-
-void delay(unsigned long ms);
-unsigned long millis(void);
-#endif
-
-#if defined(ARDUINO)
-#include <WiFi.h>
-#define HAS_WIFI 1
-#else
-#if __has_include(<WiFi.h>)
-#include <WiFi.h>
-#define HAS_WIFI 1
-#else
-#define HAS_WIFI 0
 class String {
  public:
   String() {}
@@ -61,22 +49,19 @@ class WiFiClass {
   void disconnect(bool w = true) { (void)w; }
 };
 
-extern WiFiClass WiFi;
-#define WIFI_STA 1
-#endif
-#endif
-#include <math.h>
+class TwoWire {
+ public:
+  void begin() {}
+  void setPins(int sda, int scl) {
+    (void)sda;
+    (void)scl;
+  }
+  void setClock(uint32_t hz) { (void)hz; }
+  void beginTransmission(uint8_t addr) { (void)addr; }
+  void write(uint8_t value) { (void)value; }
+  uint8_t endTransmission() { return 0; }
+};
 
-#if __has_include(<Wire.h>)
-#include <Wire.h>
-#define HAS_WIRE 1
-#else
-#define HAS_WIRE 0
-#endif
-
-#if __has_include(<LiquidCrystal_I2C.h>)
-#include <LiquidCrystal_I2C.h>
-#else
 class LiquidCrystal_I2C {
  public:
   LiquidCrystal_I2C(unsigned char addr, unsigned char cols, unsigned char rows) {
@@ -93,15 +78,28 @@ class LiquidCrystal_I2C {
   }
   void print(const char *s) { (void)s; }
 };
+
+extern HardwareSerial Serial;
+extern WiFiClass WiFi;
+extern TwoWire Wire;
+
+void delay(unsigned long ms);
+void delayMicroseconds(unsigned int us);
+unsigned long millis(void);
+
+#define WIFI_STA 1
 #endif
 
-// Adjust these pins to match your ESP32-C6 board.
-const int I2C_SDA = 6;
-const int I2C_SCL = 7;
-const uint8_t LCD_ADDR = 0x27;
+#include <math.h>
+
+const int I2C_SDA = 21;
+const int I2C_SCL = 22;
+const uint8_t LCD_ADDR_A = 0x27;
+const uint8_t LCD_ADDR_B = 0x3F;
+const unsigned long SCAN_INTERVAL_MS = 2000;
 
 constexpr int NUM_APS = 3;
-const char *AP_LIST[NUM_APS] = {"yamakawa", "AP_2", "AP_3"};
+const char *AP_LIST[NUM_APS] = {"yamakawa", "pura", "AP_3"};
 
 struct Fingerprint {
   const char *name;
@@ -115,32 +113,92 @@ const Fingerprint FINGERPRINTS[] = {
     {"A2", {-60, -45, -75}, 1.0f, 0.0f},
     {"A3", {-75, -65, -50}, 0.0f, 1.0f},
 };
+
 constexpr int NUM_FP = sizeof(FINGERPRINTS) / sizeof(FINGERPRINTS[0]);
 
-LiquidCrystal_I2C lcd(LCD_ADDR, 16, 2);
-
-const unsigned long SCAN_INTERVAL_MS = 2000;
+LiquidCrystal_I2C lcdA(LCD_ADDR_A, 16, 2);
+LiquidCrystal_I2C lcdB(LCD_ADDR_B, 16, 2);
+LiquidCrystal_I2C lcdDyn(0x20, 16, 2);
+LiquidCrystal_I2C *lcd = &lcdA;
+uint8_t lcdAddr = LCD_ADDR_A;
+bool lcdReady = false;
 unsigned long lastScanMs = 0;
 
-void setupLcd() {
-#if HAS_WIRE
-  Wire.begin(I2C_SDA, I2C_SCL);
-#endif
-  lcd.init();
-  lcd.backlight();
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("WiFi Locate");
-  lcd.setCursor(0, 1);
-  lcd.print("Scanning...");
+bool i2cAddressExists(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;
 }
 
-void printLine(int row, const char *label, const char *value) {
+uint8_t detectLcdAddress() {
+  if (i2cAddressExists(LCD_ADDR_A)) {
+    return LCD_ADDR_A;
+  }
+  if (i2cAddressExists(LCD_ADDR_B)) {
+    return LCD_ADDR_B;
+  }
+  return 0;
+}
+
+void lcdClear() {
+  lcd->clear();
+}
+
+void lcdSetCursor(uint8_t col, uint8_t row) {
+  lcd->setCursor(col, row);
+}
+
+void lcdPrint(const char *text) {
+  lcd->print(text);
+}
+
+void lcdPrintLine(uint8_t row, const char *text) {
   char buf[17];
-  snprintf(buf, sizeof(buf), "%s:%-12s", label, value);
+  snprintf(buf, sizeof(buf), "%-16s", text);
   buf[16] = '\0';
-  lcd.setCursor(0, row);
-  lcd.print(buf);
+  lcdSetCursor(0, row);
+  lcdPrint(buf);
+}
+
+void lcdInit() {
+  lcd->init();
+  delay(50);
+  lcd->backlight();
+  delay(50);
+  lcd->clear();
+  delay(2);
+}
+
+void setupLcd() {
+  Wire.setPins(I2C_SDA, I2C_SCL);
+  Wire.begin();
+  Wire.setClock(50000);
+
+  lcdAddr = detectLcdAddress();
+  if (lcdAddr == 0) {
+    lcdReady = false;
+    Serial.println("[LCD] No usable I2C LCD");
+    return;
+  }
+
+  if (lcdAddr == LCD_ADDR_B) {
+    lcd = &lcdB;
+  } else if (lcdAddr != LCD_ADDR_A) {
+    lcdDyn = LiquidCrystal_I2C(lcdAddr, 16, 2);
+    lcd = &lcdDyn;
+  } else {
+    lcd = &lcdA;
+  }
+
+  lcdInit();
+  lcdClear();
+  lcdPrintLine(0, "WiFi Locate");
+  lcdPrintLine(1, "Scanning...");
+  lcdReady = true;
+
+  char addrHex[7];
+  snprintf(addrHex, sizeof(addrHex), "0x%02X", (unsigned int)lcdAddr);
+  Serial.print("[LCD] Connected at ");
+  Serial.println(addrHex);
 }
 
 void scanRssi(int *outRssi) {
@@ -153,10 +211,8 @@ void scanRssi(int *outRssi) {
     String ssid = WiFi.SSID(i);
     int rssi = WiFi.RSSI(i);
     for (int j = 0; j < NUM_APS; j++) {
-      if (ssid == AP_LIST[j]) {
-        if (rssi > outRssi[j]) {
-          outRssi[j] = rssi;
-        }
+      if (ssid == AP_LIST[j] && rssi > outRssi[j]) {
+        outRssi[j] = rssi;
       }
     }
   }
@@ -164,12 +220,12 @@ void scanRssi(int *outRssi) {
 }
 
 float distanceTo(const int *scan, const Fingerprint &fp) {
-  float acc = 0.0f;
+  float sum = 0.0f;
   for (int i = 0; i < NUM_APS; i++) {
     float diff = (float)scan[i] - (float)fp.rssi[i];
-    acc += diff * diff;
+    sum += diff * diff;
   }
-  return sqrtf(acc);
+  return sqrtf(sum);
 }
 
 int locateNN(const int *scan) {
@@ -189,6 +245,7 @@ int locateWKNN(const int *scan, int k) {
   if (k > NUM_FP) {
     k = NUM_FP;
   }
+
   int idx[NUM_FP];
   float dist[NUM_FP];
   for (int i = 0; i < NUM_FP; i++) {
@@ -199,12 +256,12 @@ int locateWKNN(const int *scan, int k) {
   for (int i = 0; i < NUM_FP - 1; i++) {
     for (int j = i + 1; j < NUM_FP; j++) {
       if (dist[j] < dist[i]) {
-        float td = dist[i];
+        float tempDist = dist[i];
         dist[i] = dist[j];
-        dist[j] = td;
-        int ti = idx[i];
+        dist[j] = tempDist;
+        int tempIdx = idx[i];
         idx[i] = idx[j];
-        idx[j] = ti;
+        idx[j] = tempIdx;
       }
     }
   }
@@ -218,21 +275,35 @@ int locateWKNN(const int *scan, int k) {
     wx += w * FINGERPRINTS[idx[i]].x;
     wy += w * FINGERPRINTS[idx[i]].y;
   }
+
   float x = wx / sumW;
   float y = wy / sumW;
-
   int bestIdx = 0;
   float bestDist = 1e9f;
   for (int i = 0; i < NUM_FP; i++) {
     float dx = x - FINGERPRINTS[i].x;
     float dy = y - FINGERPRINTS[i].y;
-    float d = dx * dx + dy * dy;
-    if (d < bestDist) {
-      bestDist = d;
+    float dist2 = dx * dx + dy * dy;
+    if (dist2 < bestDist) {
+      bestDist = dist2;
       bestIdx = i;
     }
   }
   return bestIdx;
+}
+
+void renderLocation(const int *scan, int nnIdx, int wknnIdx) {
+  if (!lcdReady) {
+    return;
+  }
+
+  char line0[17];
+  char line1[17];
+  snprintf(line0, sizeof(line0), "N:%s W:%s", FINGERPRINTS[nnIdx].name,
+           FINGERPRINTS[wknnIdx].name);
+  snprintf(line1, sizeof(line1), "R1:%d R2:%d", scan[0], scan[1]);
+  lcdPrintLine(0, line0);
+  lcdPrintLine(1, line1);
 }
 
 void printRssiVector(const int *scan) {
@@ -271,8 +342,6 @@ void loop() {
   int nnIdx = locateNN(scan);
   int wknnIdx = locateWKNN(scan, 3);
 
-  printLine(0, "NN", FINGERPRINTS[nnIdx].name);
-  printLine(1, "WK", FINGERPRINTS[wknnIdx].name);
-
+  renderLocation(scan, nnIdx, wknnIdx);
   printRssiVector(scan);
 }
