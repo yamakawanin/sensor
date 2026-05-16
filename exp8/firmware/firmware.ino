@@ -22,6 +22,10 @@ void delay(unsigned long ms);
 unsigned long millis(void);
 #endif
 
+#if defined(ARDUINO)
+#include <WiFi.h>
+#define HAS_WIFI 1
+#else
 #if __has_include(<WiFi.h>)
 #include <WiFi.h>
 #define HAS_WIFI 1
@@ -60,6 +64,7 @@ class WiFiClass {
 extern WiFiClass WiFi;
 #define WIFI_STA 1
 #endif
+#endif
 #include <math.h>
 
 #if __has_include(<Wire.h>)
@@ -96,7 +101,7 @@ const int I2C_SCL = 7;
 const uint8_t LCD_ADDR = 0x27;
 
 constexpr int NUM_APS = 3;
-const char *AP_LIST[NUM_APS] = {"AP_1", "AP_2", "AP_3"};
+const char *AP_LIST[NUM_APS] = {"yamakawa", "AP_2", "AP_3"};
 
 struct Fingerprint {
   const char *name;
