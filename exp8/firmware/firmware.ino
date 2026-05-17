@@ -99,7 +99,7 @@ const uint8_t LCD_ADDR_B = 0x3F;
 const unsigned long SCAN_INTERVAL_MS = 2000;
 
 constexpr int NUM_APS = 3;
-const char *AP_LIST[NUM_APS] = {"yamakawa", "pura", "AP_3"};
+const char *AP_LIST[NUM_APS] = {"yamakawa", "pura", "OPPO"};
 
 struct Fingerprint {
   const char *name;
@@ -297,11 +297,12 @@ void renderLocation(const int *scan, int nnIdx, int wknnIdx) {
     return;
   }
 
+  (void)nnIdx;
+  (void)wknnIdx;
   char line0[17];
   char line1[17];
-  snprintf(line0, sizeof(line0), "N:%s W:%s", FINGERPRINTS[nnIdx].name,
-           FINGERPRINTS[wknnIdx].name);
-  snprintf(line1, sizeof(line1), "R1:%d R2:%d", scan[0], scan[1]);
+  snprintf(line0, sizeof(line0), "R1:%d", scan[0]);
+  snprintf(line1, sizeof(line1), "R2:%d R3:%d", scan[1], scan[2]);
   lcdPrintLine(0, line0);
   lcdPrintLine(1, line1);
 }
