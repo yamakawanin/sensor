@@ -11,6 +11,7 @@
 |---|---|---|
 | Mygame_4_15 | 这是一个基于 Python + Pygame 的离线版小恐龙游戏，支持 Arduino 传感器输入： | `Mygame_4_15` |
 | exp8 | - 理解基于 WiFi 指纹的定位流程（离线训练 + 在线定位）。 | `exp8` |
+| final project | 本项目实现三端链路协同： | `final project` |
 <!-- PROJECT_TABLE_END -->
 
 ## 自动同步到 GitHub
